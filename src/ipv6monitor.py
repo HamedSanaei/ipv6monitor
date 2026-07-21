@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Final, Iterable
 
-VERSION: Final = "1.0.0"
+VERSION: Final = "1.1.0"
 NFT_FAMILY: Final = "inet"
 NFT_TABLE: Final = "ipv6monitor"
 DEFAULT_CONFIG: Final = Path("/etc/ipv6monitor/ipv6monitor.conf")
@@ -45,7 +45,7 @@ LOG = logging.getLogger("ipv6monitor")
 @dataclass(frozen=True)
 class Config:
     interface: str = "auto"
-    refresh_interval: float = 0.5
+    refresh_interval: float = 1.0
     save_interval: float = 10.0
     history_interval: float = 60.0
     history_retention_days: int = 30
@@ -96,7 +96,7 @@ def parse_config(path: Path) -> Config:
         raise MonitorError(f"Invalid network interface name: {interface!r}")
 
     refresh_interval = parse_float(
-        values.get("REFRESH_INTERVAL", "0.5"), "REFRESH_INTERVAL", 0.1, 60.0
+        values.get("REFRESH_INTERVAL", "1"), "REFRESH_INTERVAL", 0.1, 60.0
     )
     save_interval = parse_float(
         values.get("SAVE_INTERVAL", "10"), "SAVE_INTERVAL", 1.0, 3600.0
@@ -448,6 +448,7 @@ def build_status(
     running: bool,
     interface: str,
     started_at: float,
+    refresh_interval: float,
     rates: dict[str, float],
     totals: dict[str, int],
     database_path: Path,
@@ -455,11 +456,12 @@ def build_status(
 ) -> dict[str, Any]:
     now = time.time()
     payload: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "version": VERSION,
         "running": running,
         "pid": os.getpid() if running else None,
         "interface": interface,
+        "refresh_interval": refresh_interval,
         "collected_at": now,
         "collected_at_iso": datetime.fromtimestamp(now, timezone.utc).isoformat(),
         "uptime_seconds": max(0.0, now - started_at),
@@ -548,6 +550,7 @@ def run_daemon(config: Config) -> int:
                 running=True,
                 interface=interface,
                 started_at=started_at,
+                refresh_interval=config.refresh_interval,
                 rates=rates,
                 totals=totals,
                 database_path=config.database_path,
@@ -573,6 +576,7 @@ def run_daemon(config: Config) -> int:
                         running=True,
                         interface=interface,
                         started_at=started_at,
+                        refresh_interval=config.refresh_interval,
                         rates=rates,
                         totals=totals,
                         database_path=config.database_path,
@@ -596,6 +600,7 @@ def run_daemon(config: Config) -> int:
                     running=True,
                     interface=interface,
                     started_at=started_at,
+                    refresh_interval=config.refresh_interval,
                     rates=rates,
                     totals=totals,
                     database_path=config.database_path,
@@ -649,6 +654,7 @@ def run_daemon(config: Config) -> int:
                     running=False,
                     interface=interface,
                     started_at=started_at,
+                    refresh_interval=config.refresh_interval,
                     rates={name: 0.0 for name in COUNTER_NAMES},
                     totals=totals,
                     database_path=config.database_path,
@@ -705,7 +711,12 @@ def clear_screen() -> None:
     sys.stdout.write("\033[2J\033[H")
 
 
-def render_status(payload: dict[str, Any], *, color: bool) -> str:
+def render_status(
+    payload: dict[str, Any],
+    *,
+    color: bool,
+    terminal_width: int | None = None,
+) -> str:
     rates = payload.get("rates", {})
     totals = payload.get("totals", {})
     ipv4_rates = rates.get("ipv4", {})
@@ -714,8 +725,9 @@ def render_status(payload: dict[str, Any], *, color: bool) -> str:
     ipv6_totals = totals.get("ipv6", {})
     collected_at = float(payload.get("collected_at", 0.0) or 0.0)
     age = max(0.0, time.time() - collected_at) if collected_at else float("inf")
+    refresh_interval = float(payload.get("refresh_interval", 1.0) or 1.0)
     running = bool(payload.get("running"))
-    healthy = running and age < 5.0
+    healthy = running and age < max(5.0, refresh_interval * 4.0)
 
     green = "\033[32m" if color else ""
     yellow = "\033[33m" if color else ""
@@ -726,47 +738,88 @@ def render_status(payload: dict[str, Any], *, color: bool) -> str:
     if running and not healthy:
         status_text = f"{yellow}STALE{reset}"
 
-    def row(protocol: str, rate_data: dict[str, Any], total_data: dict[str, Any]) -> str:
-        rx_rate = float(rate_data.get("rx_Bps", 0.0) or 0.0)
-        tx_rate = float(rate_data.get("tx_Bps", 0.0) or 0.0)
+    def values(
+        rate_data: dict[str, Any], total_data: dict[str, Any]
+    ) -> tuple[str, str, str, str]:
+        download_rate = float(rate_data.get("rx_Bps", 0.0) or 0.0)
+        upload_rate = float(rate_data.get("tx_Bps", 0.0) or 0.0)
         return (
-            f"{protocol:<6} "
-            f"{format_rate(rx_rate):>13} ({format_bits_rate(rx_rate):>13})  "
-            f"{format_rate(tx_rate):>13} ({format_bits_rate(tx_rate):>13})  "
-            f"{format_bytes(float(total_data.get('rx_bytes', 0))):>12}  "
-            f"{format_bytes(float(total_data.get('tx_bytes', 0))):>12}"
+            format_bits_rate(download_rate),
+            format_bits_rate(upload_rate),
+            format_bytes(float(total_data.get("rx_bytes", 0))),
+            format_bytes(float(total_data.get("tx_bytes", 0))),
         )
+
+    total_rates = {
+        "rx_Bps": float(ipv4_rates.get("rx_Bps", 0.0) or 0.0)
+        + float(ipv6_rates.get("rx_Bps", 0.0) or 0.0),
+        "tx_Bps": float(ipv4_rates.get("tx_Bps", 0.0) or 0.0)
+        + float(ipv6_rates.get("tx_Bps", 0.0) or 0.0),
+    }
+    total_totals = {
+        "rx_bytes": int(ipv4_totals.get("rx_bytes", 0) or 0)
+        + int(ipv6_totals.get("rx_bytes", 0) or 0),
+        "tx_bytes": int(ipv4_totals.get("tx_bytes", 0) or 0)
+        + int(ipv6_totals.get("tx_bytes", 0) or 0),
+    }
+    rows = [
+        ("IPv4", *values(ipv4_rates, ipv4_totals)),
+        ("IPv6", *values(ipv6_rates, ipv6_totals)),
+        ("TOTAL", *values(total_rates, total_totals)),
+    ]
+
+    if terminal_width is None:
+        terminal_width = shutil.get_terminal_size(fallback=(100, 24)).columns
 
     lines = [
         f"{bold}IPv6Monitor {payload.get('version', '?')}{reset}",
-        f"Status: {status_text}   Interface: {payload.get('interface', '?')}   "
-        f"Snapshot age: {age:.1f}s",
+        f"Status: {status_text}   Interface: {payload.get('interface', '?')}",
+        f"Update every: {refresh_interval:g}s   Last update: {age:.1f}s ago",
         "",
-        "Proto       RX rate       (network rate)        TX rate       "
-        "(network rate)      Total RX      Total TX",
-        "-" * 112,
-        row("IPv4", ipv4_rates, ipv4_totals),
-        row("IPv6", ipv6_rates, ipv6_totals),
-        "-" * 112,
-        row(
-            "TOTAL",
-            {
-                "rx_Bps": float(ipv4_rates.get("rx_Bps", 0.0) or 0.0)
-                + float(ipv6_rates.get("rx_Bps", 0.0) or 0.0),
-                "tx_Bps": float(ipv4_rates.get("tx_Bps", 0.0) or 0.0)
-                + float(ipv6_rates.get("tx_Bps", 0.0) or 0.0),
-            },
-            {
-                "rx_bytes": int(ipv4_totals.get("rx_bytes", 0) or 0)
-                + int(ipv6_totals.get("rx_bytes", 0) or 0),
-                "tx_bytes": int(ipv4_totals.get("tx_bytes", 0) or 0)
-                + int(ipv6_totals.get("tx_bytes", 0) or 0),
-            },
-        ),
-        "",
-        f"Persistent database: {payload.get('database', '?')}",
-        "Press Ctrl+C to exit. The collector service keeps running in the background.",
     ]
+
+    if terminal_width >= 82:
+        header = (
+            f"{'Protocol':<9}"
+            f"{'Download':>16}"
+            f"{'Upload':>16}"
+            f"{'Downloaded':>17}"
+            f"{'Uploaded':>17}"
+        )
+        separator = "-" * len(header)
+        lines.extend([header, separator])
+        for index, (protocol, download, upload, downloaded, uploaded) in enumerate(rows):
+            if index == 2:
+                lines.append(separator)
+            lines.append(
+                f"{protocol:<9}"
+                f"{download:>16}"
+                f"{upload:>16}"
+                f"{downloaded:>17}"
+                f"{uploaded:>17}"
+            )
+    else:
+        for index, (protocol, download, upload, downloaded, uploaded) in enumerate(rows):
+            if index == 2:
+                lines.append("-" * min(terminal_width, 60))
+            lines.extend(
+                [
+                    f"{bold}{protocol}{reset}",
+                    f"  Download speed: {download}",
+                    f"  Upload speed:   {upload}",
+                    f"  Total download: {downloaded}",
+                    f"  Total upload:   {uploaded}",
+                ]
+            )
+
+    lines.extend(
+        [
+            "",
+            "Download = traffic received by this server; Upload = traffic sent.",
+            f"Persistent database: {payload.get('database', '?')}",
+            "Press Ctrl+C to exit. The collector keeps running in the background.",
+        ]
+    )
     if payload.get("error"):
         lines.append(f"Last collector warning: {payload['error']}")
     return "\n".join(lines)

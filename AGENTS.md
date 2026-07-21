@@ -9,7 +9,7 @@ historical usage across terminal exits, service restarts, and machine reboots.
 ## User-facing guarantees
 
 - `ipv6monitor` with no arguments opens the live monitor.
-- Default live refresh interval is 0.5 seconds.
+- Default collector and live display refresh interval is 1 second.
 - Installation works with one `curl | sudo bash` command.
 - Required Ubuntu packages are installed automatically.
 - The systemd service is enabled and started during installation.

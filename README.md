@@ -9,9 +9,9 @@
 
 ## قابلیت‌ها
 
-- نمایش لحظه‌ای RX و TX برای IPv4 و IPv6
-- نمایش هم‌زمان سرعت به `MiB/s` و `Mbit/s`
-- به‌روزرسانی پیش‌فرض هر `0.5` ثانیه
+- نمایش لحظه‌ای سرعت دانلود و آپلود برای IPv4 و IPv6
+- نمایش سرعت شبکه با واحد خوانای `Kbit/s`، `Mbit/s` یا `Gbit/s`
+- به‌روزرسانی پیش‌فرض هر `1` ثانیه
 - تشخیص خودکار کارت شبکه دارای Default Route
 - اجرای ساده با فرمان `ipv6monitor`
 - نصب کامل با یک دستور
@@ -35,7 +35,11 @@ curl -fsSL https://raw.githubusercontent.com/HamedSanaei/ipv6monitor/main/instal
 ipv6monitor
 ```
 
-> برای انتشار رسمی، بهتر است به‌جای `main` از یک Tag ثابت مانند `v1.0.0` در
+در خروجی برنامه، `Download` به معنی ترافیک دریافت‌شده توسط سرور و `Upload`
+به معنی ترافیک ارسال‌شده از سرور است. برای جلوگیری از شلوغی، سرعت فقط با واحد
+شبکه (`Kbit/s`، `Mbit/s` یا `Gbit/s`) نمایش داده می‌شود.
+
+> برای انتشار رسمی، بهتر است به‌جای `main` از یک Tag ثابت مانند `v1.1.0` در
 > دستور نصب استفاده شود تا محتوای نصب در آینده بدون تغییر باقی بماند.
 
 ## دستورات
@@ -104,7 +108,7 @@ sudo systemctl enable --now ipv6monitor
 
 ```ini
 INTERFACE=auto
-REFRESH_INTERVAL=0.5
+REFRESH_INTERVAL=1
 SAVE_INTERVAL=10
 HISTORY_INTERVAL=60
 HISTORY_RETENTION_DAYS=30

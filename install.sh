@@ -95,6 +95,10 @@ if [[ ! -f "$CONFIG_PATH" ]]; then
     install_project_file "config/ipv6monitor.conf" "$CONFIG_PATH" 0644
 else
     log "Keeping existing configuration: $CONFIG_PATH"
+    if grep -Eq '^[[:space:]]*REFRESH_INTERVAL=0\.5[[:space:]]*$' "$CONFIG_PATH"; then
+        log "Migrating the previous default refresh interval from 0.5s to 1s..."
+        sed -i -E 's/^[[:space:]]*REFRESH_INTERVAL=0\.5[[:space:]]*$/REFRESH_INTERVAL=1/' "$CONFIG_PATH"
+    fi
 fi
 
 log "Enabling the systemd service..."

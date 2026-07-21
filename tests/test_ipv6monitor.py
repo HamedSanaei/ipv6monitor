@@ -23,7 +23,7 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             config = ipv6monitor.parse_config(Path(directory) / "missing.conf")
         self.assertEqual(config.interface, "auto")
-        self.assertEqual(config.refresh_interval, 0.5)
+        self.assertEqual(config.refresh_interval, 1.0)
         self.assertEqual(config.history_retention_days, 30)
 
     def test_parses_valid_config(self) -> None:
@@ -169,6 +169,7 @@ class FormattingTests(unittest.TestCase):
             running=True,
             interface="ens3",
             started_at=time.time(),
+            refresh_interval=1.0,
             rates={name: 0.0 for name in ipv6monitor.COUNTER_NAMES},
             totals=totals,
             database_path=Path("/tmp/traffic.db"),
@@ -176,6 +177,47 @@ class FormattingTests(unittest.TestCase):
         self.assertEqual(status["interface"], "ens3")
         self.assertIn("ipv4", status["totals"])
         self.assertIn("ipv6", status["rates"])
+
+    def test_status_render_uses_clear_download_upload_labels(self) -> None:
+        totals = ipv6monitor.blank_counters()
+        totals["rx4_bytes"] = 1024 * 1024
+        rates = {name: 0.0 for name in ipv6monitor.COUNTER_NAMES}
+        rates["rx4"] = 1_250_000
+        payload = ipv6monitor.build_status(
+            running=True,
+            interface="eth0",
+            started_at=time.time(),
+            refresh_interval=1.0,
+            rates=rates,
+            totals=totals,
+            database_path=Path("/tmp/traffic.db"),
+        )
+        output = ipv6monitor.render_status(
+            payload, color=False, terminal_width=100
+        )
+        self.assertIn("Download", output)
+        self.assertIn("Upload", output)
+        self.assertIn("Update every: 1s", output)
+        self.assertNotIn("network rate", output)
+        self.assertNotIn("RX rate", output)
+        self.assertNotIn("MiB/s", output)
+
+    def test_status_render_stacks_on_narrow_terminals(self) -> None:
+        totals = ipv6monitor.blank_counters()
+        payload = ipv6monitor.build_status(
+            running=True,
+            interface="eth0",
+            started_at=time.time(),
+            refresh_interval=1.0,
+            rates={name: 0.0 for name in ipv6monitor.COUNTER_NAMES},
+            totals=totals,
+            database_path=Path("/tmp/traffic.db"),
+        )
+        output = ipv6monitor.render_status(
+            payload, color=False, terminal_width=60
+        )
+        self.assertIn("Download speed:", output)
+        self.assertIn("Total upload:", output)
 
 
 if __name__ == "__main__":
